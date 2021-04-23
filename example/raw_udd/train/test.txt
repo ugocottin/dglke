@@ -1,0 +1,1 @@
+"Japan","located_at","Asia"

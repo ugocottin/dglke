@@ -1,0 +1,6 @@
+"Beijing","is_capital_of","China"
+"Paris","is_capital_of","France"
+"London","is_capital_of","UK"
+"UK","located_at","Europe"
+"China","located_at","Asia"
+"Tokyo","is_capital_of","Japan"
