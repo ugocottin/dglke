@@ -1,6 +1,7 @@
 import logging
 import re
 import pysmiles
+import os
 from typing import List
 
 
@@ -37,8 +38,9 @@ def predict(model_number: str, score_func: str = 'logsigmoid'):
               ' --rel_mfile train/relations.tsv'
               f' --score_func {score_func}'
               " --exec_mode 'all'"
-              ' --topK 10'
+              ' --topK 20'
               f' --output ckpts/{model_number}/result.tsv')
+
 
 def extract(file_path: str) -> List[dict]:
     """
@@ -91,16 +93,24 @@ def molecule_to_train(molecule: dict, column_separator: str) -> str:
     # A partir du smiles, on construit le graphe de connaissance
     graph = pysmiles.read_smiles(molecule['smiles'])
     atoms = graph.nodes(data='element')
-    
+
     content: str = ''
-    for edge in graph.edges:
-        edge_from = f'{molecule["name"]}_{edge[0]}'
-        edge_to = f'{molecule["name"]}_{edge[1]}'
+    for node in graph.nodes:
+        edge_from = f'{molecule["name"]}_{node}'
+        element = graph.nodes(data='element')[node]
+        content += f'{edge_from}{column_separator}chemical_element{column_separator}{element}\n'
 
-        content += f'{edge_from}{column_separator}connected_to{column_separator}{edge_to}\n'
+        for to in graph[node]:
+            edge_to = f'{molecule["name"]}_{to}'
+            order = graph[node].get(to).get('order')
 
-        content += f'{edge_from}{column_separator}chemical_element{column_separator}{atoms[edge[0]]}\n'
-        content += f'{edge_to}{column_separator}chemical_element{column_separator}{atoms[edge[1]]}\n'
+            link = ""
+            if order == 2:
+                link = "double_"
+            if order == 3:
+                link = "triple_"
+
+            content += f'{edge_from}{column_separator}{link}connected_to{column_separator}{edge_to}\n'
 
     for index, atom in enumerate(atoms):
         content += f'{molecule["name"]}{column_separator}contains{column_separator}{molecule["name"]}_{index}\n'
@@ -123,8 +133,9 @@ def set_to_train(source_set: List[dict], column_separator: str = '\t') -> str:
     """
     content: str = ''
     for molecule in source_set:
-        content += molecule_to_train(molecule=molecule, column_separator=column_separator)
-        
+        content += molecule_to_train(molecule=molecule,
+                                     column_separator=column_separator)
+
     return content
 
 
@@ -169,7 +180,7 @@ def get_scores(file_path: str, column_separator: str = '\t') -> List[dict]:
                 break
 
             columns: [str] = line.split(sep=column_separator)
-            content.append({ 'name': columns[0], 'score': float(columns[3]) })
+            content.append({'name': columns[0], 'score': float(columns[3])})
 
     return content
 
@@ -183,9 +194,9 @@ if __name__ == '__main__':
     # Main function
     logging.getLogger('pysmiles').setLevel(logging.CRITICAL)
 
-    
     # Extraire les données des fichiers SDF
-    training_set: List[dict] = extract(file_path='data/main_protease_inhibitors.sdf')
+    training_set: List[dict] = extract(
+        file_path='data/main_protease_inhibitors.sdf')
     test_set: List[dict] = extract(file_path='data/LC_Protease.sdf')
 
     # Transformer un set de molécule en un fichier de train
@@ -193,24 +204,24 @@ if __name__ == '__main__':
 
     # Ecrire le graph dans un fichier de train
     write(content=train_dot_txt, file_path='train/train.txt')
-    
+
     # On donne les relations valides
     valid_dot_txt = set_to_valid(source_set=training_set)
     write(content=valid_dot_txt, file_path='train/valid.txt')
     write(content=valid_dot_txt, file_path='train/test.txt')
 
     # Phase d'apprentissage avec le fichier d'apprentissage créer
-    train(model_name="TransE_l2", gamma=12.0, model_number="model1", regularization_coef=1.00E-09, batch_size=20, hidden_dim=40, lr=0.25, neg_sample_size=2, num_thread=6, num_proc=1, max_step=5000)
+    # train(model_name="TransE_l2", gamma=12.0, model_number="model1", regularization_coef=1.00E-09, batch_size=20, hidden_dim=40, lr=0.25, neg_sample_size=2, num_thread=6, num_proc=1, max_step=5000)
 
     # On donne la liste des molécules à tester
     head_dot_list = set_to_head(source_set=test_set)
     write(content=head_dot_list, file_path='predict/head.list')
-    
+
     write(content="cure\n", file_path='predict/rel.list')
     write(content="Covid-19\n", file_path='predict/tail.list')
 
-    # Phase de prédiction 
-    predict("model1")
+    # Phase de prédiction
+    # predict("model1")
 
     # Trier les résultats et récuperer les meilleurs
     # scores = get_scores(file_path='ckpts/model1/result.tsv')
