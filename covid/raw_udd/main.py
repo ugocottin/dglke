@@ -29,8 +29,8 @@ def train(model_name: str, gamma: float, model_number: str, regularization_coef:
 
 
 # Prediction avec le fichier test.txt
-def predict(model_number: str, score_func: str = 'logsigmoid'):
-    os.system(f' dglke_predict --model_path ckpts/{model_number}/TransE_l2_BASE_0/'
+def predict(model_name: str, model_number: str, score_func: str = 'logsigmoid'):
+    os.system(f' dglke_predict --model_path ckpts/{model_number}/{model_name}_BASE_0/'
               " --format 'h_r_t' "
               " --data_files predict/head.list predict/rel.list predict/tail.list"
               ' --raw_data'
@@ -210,8 +210,11 @@ if __name__ == '__main__':
     write(content=valid_dot_txt, file_path='train/valid.txt')
     write(content=valid_dot_txt, file_path='train/test.txt')
 
+    model = 'TransE'
+
     # Phase d'apprentissage avec le fichier d'apprentissage créer
-    # train(model_name="TransE_l2", gamma=12.0, model_number="model1", regularization_coef=1.00E-09, batch_size=20, hidden_dim=40, lr=0.25, neg_sample_size=2, num_thread=6, num_proc=1, max_step=5000)
+    train(model_name=model, gamma=12.0, model_number="model1", regularization_coef=1.00E-09,
+          batch_size=20, hidden_dim=40, lr=0.25, neg_sample_size=2, num_thread=6, num_proc=1, max_step=5000)
 
     # On donne la liste des molécules à tester
     head_dot_list = set_to_head(source_set=test_set)
@@ -221,8 +224,8 @@ if __name__ == '__main__':
     write(content="Covid-19\n", file_path='predict/tail.list')
 
     # Phase de prédiction
-    # predict("model1")
+    predict(model_name=model, model_number="model1")
 
     # Trier les résultats et récuperer les meilleurs
-    # scores = get_scores(file_path='ckpts/model1/result.tsv')
-    # get_best_scores(scores=scores)
+    scores = get_scores(file_path='ckpts/model1/result.tsv')
+    get_best_scores(scores=scores)
