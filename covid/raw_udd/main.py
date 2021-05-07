@@ -2,27 +2,26 @@ import logging
 import re
 import pysmiles
 import os
+import numpy
 from typing import List
+from pprint import pprint
 
 
 # Apprentissage avec le fichier train.txt
-def train(model_name: str, gamma: float, model_number: str, regularization_coef: float, batch_size: int, hidden_dim: int, lr: float, neg_sample_size: int, num_thread: int = 1, num_proc: int = 1, max_step: int = 10000):
+def train(model_name: str, model_number: str, regularization_coef: float, batch_size: int, hidden_dim: int, neg_sample_size: int, num_thread: int = 1, num_proc: int = 1, max_step: int = 10000):
     os.system("DGLBACKEND=pytorch dglke_train"
               ' --dataset BASE'
               f' --model_name {model_name}'
               ' --data_path ./train'
-              ' --data_files train.txt valid.txt test.txt'
+              ' --data_files train.tsv valid.tsv test.tsv'
               ' --format \'raw_udd_hrt\''
               f' --batch_size {batch_size}'
               f' --neg_sample_size {neg_sample_size}'
               f' --hidden_dim {hidden_dim}'
-              f' --gamma {gamma}'
-              f' --lr {lr}'
               f' --max_step {max_step}'
               ' --log_interval 100'
               ' --batch_size_eval 16'
-              ' -adv'
-              f' --regularization_coef {regularization_coef}'
+			  f' --regularization_coef {regularization_coef}'
               f' --num_thread {num_thread}'
               f' --num_proc {num_proc}'
               f' --save_path ./ckpts/{model_number}')
@@ -77,28 +76,41 @@ def split_descriptions(content: str, separator: str = '$$$$') -> List[str]:
     return content.split(separator, -1)
 
 
-def get_id(description: str) -> str:
-    split = description.split('\n', -1)
-    identifier = next(el for el in split if el != '')
-    return identifier
-
-
 def get_smile(description: str) -> str:
     search = re.findall(r'> {2}<Smiles>\n[\s\S]*$\n', description)[0]
     split = search.split('\n', -1)
     return split[1]
 
 
-def molecule_to_train(molecule: dict, column_separator: str) -> str:
-    # A partir du smiles, on construit le graphe de connaissance
+mapping: [str] = []
+
+
+def get_id(description: str) -> str:
+    name = next(s for s in description.split('\n', -1) if s)
+    mapping.append(name)
+    return f'{len(mapping) - 1}'
+
+
+def data_to_triplets(data_set: dict, cure: bool = False) -> [[str]]:
+    triplets: [[str]] = []
+    for molecule in data_set:
+        triplet = molecule_to_triplet(molecule=molecule)
+        if cure:
+            triplet += [[f'{molecule["name"]}', 'cure', 'Covid-19']]
+        triplets += triplet
+
+    return triplets
+
+
+def molecule_to_triplet(molecule: dict) -> [[str]]:
     graph = pysmiles.read_smiles(molecule['smiles'])
     atoms = graph.nodes(data='element')
 
-    content: str = ''
+    triplets: [[str]] = []
     for node in graph.nodes:
         edge_from = f'{molecule["name"]}_{node}'
         element = graph.nodes(data='element')[node]
-        content += f'{edge_from}{column_separator}chemical_element{column_separator}{element}\n'
+        triplets.append([edge_from, 'chemial_element', element])
 
         for to in graph[node]:
             edge_to = f'{molecule["name"]}_{to}'
@@ -110,46 +122,18 @@ def molecule_to_train(molecule: dict, column_separator: str) -> str:
             if order == 3:
                 link = "triple_"
 
-            content += f'{edge_from}{column_separator}{link}connected_to{column_separator}{edge_to}\n'
+            triplets.append([edge_from, f'{link}connected_to', edge_to])
 
     for index, atom in enumerate(atoms):
-        content += f'{molecule["name"]}{column_separator}contains{column_separator}{molecule["name"]}_{index}\n'
+        triplets.append([molecule["name"], 'contains',
+                        f'{molecule["name"]}_{index}'])
 
-    return content
-
-
-def set_to_train(source_set: List[dict], column_separator: str = '\t') -> str:
-    """
-    Transforme une liste de molécules en un graphe de connaissance
-    Parameters
-    ----------
-    source_set: list[dict]
-        liste de molécules sous forme {'name': 'foo', 'smiles': 'bar}
-
-    Returns
-    -------
-    str
-        le contenu du graphe de connaissance, sous forme de string
-    """
-    content: str = ''
-    for molecule in source_set:
-        content += molecule_to_train(molecule=molecule,
-                                     column_separator=column_separator)
-
-    return content
+    return triplets
 
 
 def write(content: str, file_path: str):
     with open(file_path, 'w+') as file:
         file.write(content)
-
-
-def set_to_valid(source_set: List[dict], column_separator: str = '\t') -> str:
-    content: str = ''
-    for molecule in source_set:
-        content += f'{molecule["name"]}{column_separator}cure{column_separator}Covid-19\n'
-
-    return content
 
 
 def set_to_head(source_set: List[dict]) -> str:
@@ -160,17 +144,8 @@ def set_to_head(source_set: List[dict]) -> str:
     return content
 
 
-def remove_duplicate_molecule(source_set: List[dict]) -> List[dict]:
-    destination_set: List[dict] = []
-    for molecule in source_set:
-        if molecule not in destination_set:
-            destination_set.append(molecule)
-
-    return destination_set
-
-
-def get_scores(file_path: str, column_separator: str = '\t') -> List[dict]:
-    content: list[dict] = []
+def get_scores(file_path: str, column_separator: str = '\t') -> [[str]]:
+    triplets: [[str]] = []
     with open(file=file_path, mode='r') as file:
         file.readline()
         while True:
@@ -180,14 +155,14 @@ def get_scores(file_path: str, column_separator: str = '\t') -> List[dict]:
                 break
 
             columns: [str] = line.split(sep=column_separator)
-            content.append({'name': columns[0], 'score': float(columns[3])})
+            triplets.append([
+                mapping[
+                    int(columns[0])
+                ],
+                columns[3]
+            ])
 
-    return content
-
-
-def get_best_scores(scores: List[dict], count: int = 10):
-    max_el = max(scores, key=lambda x: x['score'])
-    print(max_el)
+    return triplets
 
 
 if __name__ == '__main__':
@@ -195,29 +170,50 @@ if __name__ == '__main__':
     logging.getLogger('pysmiles').setLevel(logging.CRITICAL)
 
     # Extraire les données des fichiers SDF
-    training_set: List[dict] = extract(
+    main_protease_set: List[dict] = extract(
         file_path='data/main_protease_inhibitors.sdf')
-    test_set: List[dict] = extract(file_path='data/LC_Protease.sdf')
+    lc_protease_set: List[dict] = extract(file_path='data/LC_Protease.sdf')
+    triplets = data_to_triplets(data_set=main_protease_set, cure=True)
 
-    # Transformer un set de molécule en un fichier de train
-    train_dot_txt = set_to_train(source_set=training_set+test_set)
+    triplets += data_to_triplets(data_set=lc_protease_set)
+    triplets_count = len(triplets)
 
-    # Ecrire le graph dans un fichier de train
-    write(content=train_dot_txt, file_path='train/train.txt')
+	# Seed https://www.dgl.ai/news/2020/06/09/covid.html
+    seed = numpy.arange(triplets_count)
+    numpy.random.shuffle(seed)
 
-    # On donne les relations valides
-    valid_dot_txt = set_to_valid(source_set=training_set)
-    write(content=valid_dot_txt, file_path='train/valid.txt')
-    write(content=valid_dot_txt, file_path='train/test.txt')
+    train_count = int(triplets_count * 0.9)
+    valid_count = int(triplets_count * 0.05)
+
+    train_set = seed[:train_count].tolist()
+    valid_set = seed[train_count:train_count + valid_count].tolist()
+    test_set = seed[train_count + valid_count:].tolist()
+
+    separator = '\t'
+
+    with open('train/train.tsv', 'w+') as f:
+        for idx in train_set:
+            f.writelines(
+                f'{triplets[idx][0]}{separator}{triplets[idx][1]}{separator}{triplets[idx][2]}\n')
+
+    with open('train/valid.tsv', 'w+') as f:
+        for idx in valid_set:
+            f.writelines(
+                f'{triplets[idx][0]}{separator}{triplets[idx][1]}{separator}{triplets[idx][2]}\n')
+
+    with open('train/test.tsv', 'w+') as f:
+        for idx in test_set:
+            f.writelines(
+                f'{triplets[idx][0]}{separator}{triplets[idx][1]}{separator}{triplets[idx][2]}\n')
 
     model = 'TransE'
 
     # Phase d'apprentissage avec le fichier d'apprentissage créer
-    train(model_name=model, gamma=12.0, model_number="model1", regularization_coef=1.00E-09,
-          batch_size=20, hidden_dim=40, lr=0.25, neg_sample_size=2, num_thread=6, num_proc=1, max_step=5000)
+    train(model_name=model, model_number="model1", regularization_coef=1.00E-07,
+          batch_size=256, hidden_dim=40, neg_sample_size=32, num_thread=6, num_proc=1, max_step=5000)
 
     # On donne la liste des molécules à tester
-    head_dot_list = set_to_head(source_set=test_set)
+    head_dot_list = set_to_head(source_set=lc_protease_set)
     write(content=head_dot_list, file_path='predict/head.list')
 
     write(content="cure\n", file_path='predict/rel.list')
@@ -228,4 +224,6 @@ if __name__ == '__main__':
 
     # Trier les résultats et récuperer les meilleurs
     scores = get_scores(file_path='ckpts/model1/result.tsv')
-    get_best_scores(scores=scores)
+    with open('results.tsv', 'w+') as f:
+        for score in scores:
+            f.writelines(f'{score[0]}\t{score[1]}')
